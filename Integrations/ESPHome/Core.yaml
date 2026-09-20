@@ -1,9 +1,5 @@
 substitutions:
-  version: "26.9.20.0"
-  stable_manifest_base: "https://apolloautomation.github.io/CAST-1"
-  beta_manifest_base: "https://github.com/ApolloAutomation/CAST-1/releases/download/beta-fw"
-  stable_manifest_dir: "firmware"
-  beta_manifest_file: "manifest.json"
+  version: "26.9.20.1"
 
 esphome:
   friendly_name: Apollo CAST-1
@@ -54,9 +50,7 @@ esphome:
         - text_sensor.template.publish:
             id: apollo_firmware_version
             state: "${version}"
-    - priority: -100
-      then:
-        - script.execute: apply_ota_source
+
     # Ethernet never came up, so bring WiFi back for rejoin or provisioning
     - priority: -100
       then:
@@ -89,20 +83,12 @@ esphome:
 ota:
   - platform: esphome
     id: ota_esphome
-  - platform: http_request
-    id: ota_managed
 
 safe_mode:
   id: safe_mode_1
 
 logger:
   id: logger_1
-
-update:
-  - platform: http_request
-    id: update_http_request
-    name: Firmware Update
-    source: ${stable_manifest_base}/${stable_manifest_dir}/manifest.json
 
 # Prefer Ethernet whenever it is connected; ESPHome arbitrates the route
 network:
@@ -158,7 +144,6 @@ ethernet:
         else:
           # WiFi-silent boot (ethernet_expected): stays off.
           - lambda: "id(ethernet_expected) = true;"
-    - component.update: update_http_request
     - component.update: network_connection
   on_disconnect:
     # Cable gone, so bring WiFi up to rejoin or open the provisioning hotspot
@@ -172,7 +157,6 @@ wifi:
     # Must stay set: gates the recovery probe so it never pops the hotspot on
     # a device that was never provisioned
     - lambda: "id(wifi_provisioned) = true;"
-    - component.update: update_http_request
   on_disconnect:
     # Turn WiFi off after 60s without reassociation, which keeps the 90s
     # fallback hotspot from ever starting while Ethernet carries the device
@@ -250,11 +234,11 @@ globals:
   - id: cycleCounter
     type: int
     restore_value: no
-    initial_value: '0'
+    initial_value: "0"
   - id: button_press_timestamp
     restore_value: no
     type: uint32_t
-    initial_value: '0'
+    initial_value: "0"
   - id: runTest
     restore_value: yes
     type: bool
@@ -265,18 +249,18 @@ globals:
     initial_value: "0"
   - id: announcement_triggered
     type: bool
-    initial_value: 'false'
+    initial_value: "false"
   # True when WiFi was released while Ethernet carried the device, which makes
   # the next boot start WiFi-silent
   - id: ethernet_expected
     type: bool
     restore_value: yes
-    initial_value: 'false'
+    initial_value: "false"
   # True once WiFi has ever connected, which gates the WiFi recovery probe
   - id: wifi_provisioned
     type: bool
     restore_value: yes
-    initial_value: 'false'
+    initial_value: "false"
 
 psram:
   id: psram_1
@@ -290,14 +274,6 @@ web_server:
   port: 80
   version: 3
 
-http_request:
-  id: http_request_1
-  verify_ssl: true
-  # Fits GitHub's ~3.6KB CSP redirect header
-  buffer_size_rx: 5120
-  # Fits GitHub's long signed redirect URL
-  buffer_size_tx: 2048
-
 i2c:
   sda: GPIO47
   scl: GPIO48
@@ -308,19 +284,6 @@ button:
     id: restart_button
     icon: mdi:power-cycle
     name: "ESP Reboot"
-  - platform: template
-    name: "Firmware Update"
-    id: update_firmware
-    icon: mdi:cloud-download
-    entity_category: config
-    on_press:
-      - logger.log: "Applying firmware update for the selected channel"
-      - delay: 3s
-      - script.execute: apply_ota_source
-      - script.wait: apply_ota_source
-      # Give async manifest fetch time to land
-      - delay: 5s
-      - lambda: id(update_http_request).perform(true);
 
 binary_sensor:
   - platform: status
@@ -469,22 +432,6 @@ light:
           min_brightness: 50%
           max_brightness: 100%
 
-select:
-  - platform: template
-    id: firmware_channel
-    name: "Firmware Channel"
-    icon: "mdi:source-branch"
-    entity_category: config
-    optimistic: true
-    restore_value: true
-    options:
-      - "Stable"
-      - "Beta"
-    initial_option: "Stable"
-    on_value:
-      then:
-        - script.execute: apply_ota_source
-
 audio_dac:
   - platform: pcm5122
     id: external_dac
@@ -493,10 +440,10 @@ audio_dac:
     bits_per_sample: 16bit
 
 i2s_audio:
-- id: i2s_out
-  i2s_lrclk_pin: GPIO10
-  i2s_bclk_pin: GPIO14
-  
+  - id: i2s_out
+    i2s_lrclk_pin: GPIO10
+    i2s_bclk_pin: GPIO14
+
 speaker:
   - platform: i2s_audio
     id: i2s_speaker_id
@@ -533,7 +480,6 @@ speaker:
     sample_rate: 48000
     bits_per_sample: 16
 
-
 sendspin:
   id: sendspin_hub
   # PSRAM stack skews time sync; keep internal
@@ -562,8 +508,8 @@ media_player:
     volume_increment: 0.05
 
     announcement_pipeline:
-      format: FLAC     # Least CPU-intensive codec
-      num_channels: 1  # Mono suffices for announcements
+      format: FLAC # Least CPU-intensive codec
+      num_channels: 1 # Mono suffices for announcements
       sample_rate: 48000
       speaker: announcement_resampling_speaker
       sources:
@@ -571,7 +517,7 @@ media_player:
 
     media_pipeline:
       speaker: media_resampling_speaker
-      format: FLAC     # Least CPU-intensive codec
+      format: FLAC # Least CPU-intensive codec
       num_channels: 2
       sample_rate: 48000
       sources:
@@ -621,10 +567,6 @@ media_player:
                 id: media_mixer_input
                 decibel_reduction: 0
                 duration: 1.0s
-
-
-
-
 
 # Retry a released WiFi while Ethernet is up, so an outage doesn't leave the
 # radio silent until the next cable pull
@@ -686,24 +628,14 @@ script:
                   id(captive_portal_1).end();
                 }
 
-  - id: apply_ota_source
-    then:
-      - lambda: |-
-          const bool beta = id(firmware_channel).current_option() == "Beta";
-          std::string url = beta
-            ? "${beta_manifest_base}/${beta_manifest_file}"
-            : "${stable_manifest_base}/${stable_manifest_dir}/manifest.json";
-          ESP_LOGI("firmware", "OTA manifest set to: %s", url.c_str());
-          id(update_http_request).set_source_url(url);
-      - component.update: update_http_request
   - id: statusCheck
     then:
       - if:
           condition:
-            - lambda: 'return id(ink_ha_connected).state;'
+            - lambda: "return id(ink_ha_connected).state;"
           then:
             - logger.log: "Apollo Automation: Connected To HA"
-            - light.turn_on: 
+            - light.turn_on:
                 id: rgb_light
                 brightness: 100%
                 red: 0%
@@ -711,10 +643,10 @@ script:
                 blue: 100%
       - delay: 5s
       - light.turn_off: rgb_light
-  
+
   - id: testScript
     then:
-      if: 
+      if:
         condition:
           - lambda: "return id(runTest) == true;"
         then:
@@ -748,7 +680,7 @@ script:
                     blue: 0%
                 - light.turn_off:
                     id: rgb_light
-                
+
               else:
                 - lambda: "id(runTest) = false;"
                 - light.turn_on:
