@@ -1,5 +1,5 @@
 substitutions:
-  version: "26.9.20.2"
+  version: "26.9.20.3"
 
 esphome:
   friendly_name: Apollo CAST-1
@@ -10,20 +10,6 @@ esphome:
     board_build.flash_mode: dio
   # List form so package on_boot entries (wizmote.yaml) merge
   on_boot:
-    - priority: 800
-      then:
-        - if:
-            condition:
-              - lambda: "return id(runTest);"
-            then:
-              - lambda: "id(testScript).execute();"
-
-    - priority: 500
-      then:
-        - text_sensor.template.publish:
-            id: apollo_firmware_version
-            state: "${version}"
-
     - priority: -300
       then:
         - if:
@@ -102,22 +88,6 @@ api:
   encryption:
 
 globals:
-  - id: cycleCounter
-    type: int
-    restore_value: no
-    initial_value: "0"
-  - id: button_press_timestamp
-    restore_value: no
-    type: uint32_t
-    initial_value: "0"
-  - id: runTest
-    restore_value: yes
-    type: bool
-    initial_value: "true"
-  - id: testCycleCount
-    type: int
-    restore_value: no
-    initial_value: "0"
   - id: announcement_triggered
     type: bool
     initial_value: "false"
@@ -145,39 +115,6 @@ button:
     icon: mdi:power-cycle
     name: "ESP Reboot"
 
-binary_sensor:
-  - platform: status
-    name: Online
-    id: ink_ha_connected
-
-  - platform: gpio
-    pin:
-      number: GPIO0
-      inverted: true
-      ignore_strapping_warning: true
-      mode:
-        input: true
-        pullup: true
-    id: reset_button
-    on_press:
-      then:
-        - lambda: |-
-            id(button_press_timestamp) = millis();
-    on_release:
-      then:
-        - lambda: |-
-            if (millis() - id(button_press_timestamp) >= 8000) {
-              id(factory_reset_switch).turn_on();
-            }
-            else if (millis() - id(button_press_timestamp) >= 1000) {
-              // StatusCheck
-              id(statusCheck).execute();
-              delay(3000);
-              id(testCycleCount) = 0;
-              id(runTest) = true;
-              id(testScript).execute();
-            }
-
 sensor:
   - platform: internal_temperature
     name: "ESP Temperature"
@@ -190,15 +127,6 @@ sensor:
     update_interval: 60s
 
 switch:
-  - platform: factory_reset
-    disabled_by_default: True
-    name: "Factory Reset ESP"
-    id: factory_reset_all
-
-  - platform: factory_reset
-    id: factory_reset_switch
-    internal: true
-
   - platform: template
     name: "Bluetooth Proxy"
     id: bluetooth_proxy_switch
@@ -233,18 +161,6 @@ text_sensor:
     id: sendspin_album
     type: album
     name: Album
-
-  - platform: version
-    id: esphome_version_sensor
-    name: "ESPHome Version"
-    hide_timestamp: true
-    entity_category: "diagnostic"
-
-  - platform: template
-    name: "Apollo Firmware Version"
-    id: apollo_firmware_version
-    update_interval: never
-    entity_category: "diagnostic"
 
 light:
   - platform: esp32_rmt_led_strip
@@ -404,73 +320,3 @@ media_player:
                 id: media_mixer_input
                 decibel_reduction: 0
                 duration: 1.0s
-
-script:
-  - id: statusCheck
-    then:
-      - if:
-          condition:
-            - lambda: "return id(ink_ha_connected).state;"
-          then:
-            - logger.log: "Apollo Automation: Connected To HA"
-            - light.turn_on:
-                id: rgb_light
-                brightness: 100%
-                red: 0%
-                green: 0%
-                blue: 100%
-      - delay: 5s
-      - light.turn_off: rgb_light
-
-  - id: testScript
-    then:
-      if:
-        condition:
-          - lambda: "return id(runTest) == true;"
-        then:
-          - lambda: "id(runTest) = false;"
-          - lambda: "id(testCycleCount) = 0;"
-          - delay: 2s
-          - while:
-              condition:
-                - lambda: "return id(testCycleCount) < 5;"
-              then:
-                - lambda: "id(runTest) = false;"
-                - delay: 1s
-                - lambda: "id(testCycleCount) += 1;"
-
-          ## TODO: Update
-          - if:
-              condition:
-                - lambda: "return true;"
-              then:
-                - lambda: "id(runTest) = false;"
-                - light.turn_on:
-                    id: rgb_light
-                    red: 0%
-                    green: 100%
-                    blue: 0%
-                - delay: 5s
-                - light.turn_on:
-                    id: rgb_light
-                    red: 0%
-                    green: 0%
-                    blue: 0%
-                - light.turn_off:
-                    id: rgb_light
-
-              else:
-                - lambda: "id(runTest) = false;"
-                - light.turn_on:
-                    id: rgb_light
-                    red: 100%
-                    green: 0%
-                    blue: 0%
-                - delay: 5s
-                - light.turn_on:
-                    id: rgb_light
-                    red: 0%
-                    green: 0%
-                    blue: 0%
-                - light.turn_off:
-                    id: rgb_light
