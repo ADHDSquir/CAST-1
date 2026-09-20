@@ -5,10 +5,6 @@ substitutions:
   stable_manifest_dir: "firmware"
   beta_manifest_file: "manifest.json"
 
-
-packages:
-  wizmote: !include wizmote.yaml
-
 esphome:
   friendly_name: Apollo CAST-1
   comment: Apollo CAST-1
