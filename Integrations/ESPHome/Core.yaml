@@ -4,7 +4,6 @@ substitutions:
 esphome:
   friendly_name: Apollo CAST-1
   comment: Apollo CAST-1
-  name_add_mac_suffix: true
   min_version: 2026.8.0
   platformio_options:
     board_build.flash_mode: dio
