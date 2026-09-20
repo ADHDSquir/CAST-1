@@ -1,11 +1,10 @@
 substitutions:
-  version: "26.9.20.1"
+  version: "26.9.20.2"
 
 esphome:
   friendly_name: Apollo CAST-1
   comment: Apollo CAST-1
   name_add_mac_suffix: true
-  # network: priority: (WiFi + Ethernet in one firmware) needs 2026.8
   min_version: 2026.8.0
   platformio_options:
     board_build.flash_mode: dio
@@ -18,57 +17,13 @@ esphome:
               - lambda: "return id(runTest);"
             then:
               - lambda: "id(testScript).execute();"
-    # Keep WiFi off when Ethernet is expected, so the fallback hotspot can't
-    # broadcast while Ethernet waits for DHCP
-    # Must run after globals restore (800) and before wifi setup (245)
-    - priority: 600
-      then:
-        - if:
-            condition:
-              lambda: "return id(ethernet_expected);"
-            then:
-              - lambda: |-
-                  id(wifi_1).set_enable_on_boot(false);
 
-    # Park the W5500 helper task when no HAT is present, so it stops polling a
-    # floating SPI bus and panicking the device every ~100s
-    # Must run after ethernet setup (250)
-    - priority: 200
-      then:
-        - if:
-            condition:
-              lambda: "return id(ethernet_1).is_failed();"
-            then:
-              - lambda: |-
-                  TaskHandle_t orphan = xTaskGetHandle("w5500_tsk");
-                  if (orphan != nullptr) {
-                    vTaskSuspend(orphan);
-                    ESP_LOGW("ethernet", "No Ethernet HAT detected; parked the W5500 helper task");
-                  }
     - priority: 500
       then:
         - text_sensor.template.publish:
             id: apollo_firmware_version
             state: "${version}"
 
-    # Ethernet never came up, so bring WiFi back for rejoin or provisioning
-    - priority: -100
-      then:
-        - if:
-            condition:
-              lambda: "return id(ethernet_expected);"
-            then:
-              - wait_until:
-                  condition:
-                    ethernet.connected:
-                  timeout: 20s
-              - if:
-                  condition:
-                    not:
-                      ethernet.connected:
-                  then:
-                    - lambda: "id(ethernet_expected) = false;"
-                    - wifi.enable:
     - priority: -300
       then:
         - if:
@@ -90,93 +45,9 @@ safe_mode:
 logger:
   id: logger_1
 
-# Prefer Ethernet whenever it is connected; ESPHome arbitrates the route
-network:
-  id: network_1
-  priority:
-    - ethernet
-    - wifi
-
-ethernet:
-  id: ethernet_1
-  type: W5500
-  clock_speed: 40MHz
-  clk_pin: GPIO7
-  mosi_pin: GPIO12
-  miso_pin: GPIO11
-  cs_pin: GPIO6
-  interrupt_pin: GPIO13
-  reset_pin: GPIO21
-  on_connect:
-    # Keep WiFi up alongside Ethernet so Home Assistant's connection to the
-    # WiFi address survives; release it only when WiFi has no network to offer
-    - if:
-        condition:
-          wifi.enabled:
-        then:
-          - if:
-              condition:
-                wifi.ap_active:
-              then:
-                # Fallback hotspot is broadcasting: WiFi has no network.
-                - script.execute: wifi_release_radio
-              else:
-                # WiFi may still be associating at boot, so wait it out
-                # Ends early if the fallback AP starts
-                - wait_until:
-                    condition:
-                      or:
-                        - wifi.connected:
-                        - wifi.ap_active:
-                    timeout: 30s
-                - if:
-                    condition:
-                      wifi.connected:
-                    then:
-                      - lambda: "id(ethernet_expected) = false;"
-                    else:
-                      # Leave WiFi alone if the cable vanished during the wait
-                      - if:
-                          condition:
-                            ethernet.connected:
-                          then:
-                            - script.execute: wifi_release_radio
-        else:
-          # WiFi-silent boot (ethernet_expected): stays off.
-          - lambda: "id(ethernet_expected) = true;"
-    - component.update: network_connection
-  on_disconnect:
-    # Cable gone, so bring WiFi up to rejoin or open the provisioning hotspot
-    - lambda: "id(ethernet_expected) = false;"
-    - wifi.enable:
-    - component.update: network_connection
-
 wifi:
   id: wifi_1
-  on_connect:
-    # Must stay set: gates the recovery probe so it never pops the hotspot on
-    # a device that was never provisioned
-    - lambda: "id(wifi_provisioned) = true;"
-  on_disconnect:
-    # Turn WiFi off after 60s without reassociation, which keeps the 90s
-    # fallback hotspot from ever starting while Ethernet carries the device
-    - if:
-        condition:
-          ethernet.connected:
-        then:
-          - wait_until:
-              condition:
-                wifi.connected:
-              timeout: 60s
-          - if:
-              condition:
-                and:
-                  - wifi.enabled:
-                  - not:
-                      wifi.connected:
-                  - ethernet.connected:
-              then:
-                - script.execute: wifi_release_radio
+
   # Workaround: roam scans drop active audio
   post_connect_roaming: false
   ap:
@@ -249,17 +120,6 @@ globals:
     initial_value: "0"
   - id: announcement_triggered
     type: bool
-    initial_value: "false"
-  # True when WiFi was released while Ethernet carried the device, which makes
-  # the next boot start WiFi-silent
-  - id: ethernet_expected
-    type: bool
-    restore_value: yes
-    initial_value: "false"
-  # True once WiFi has ever connected, which gates the WiFi recovery probe
-  - id: wifi_provisioned
-    type: bool
-    restore_value: yes
     initial_value: "false"
 
 psram:
@@ -353,29 +213,6 @@ switch:
       - esp32_ble_tracker.stop_scan:
 
 text_sensor:
-  # Which path is carrying the device, for troubleshooting and HA notifications
-  - platform: template
-    name: "Network Connection"
-    id: network_connection
-    icon: "mdi:network"
-    entity_category: "diagnostic"
-    update_interval: 10s
-    lambda: |-
-      const bool eth = id(ethernet_1).is_connected();
-      const bool sta = !id(wifi_1).is_disabled() && id(wifi_1).is_connected();
-      const bool ap  = !id(wifi_1).is_disabled() && id(wifi_1).is_ap_active();
-      if (eth && sta) return std::string("Ethernet + WiFi");
-      if (eth) return std::string("Ethernet");
-      if (sta) return std::string("WiFi");
-      if (ap) return std::string("Hotspot");
-      return std::string("Connecting");
-
-  - platform: ethernet_info
-    ip_address:
-      name: "Ethernet IP Address"
-      id: eth_ip
-      entity_category: "diagnostic"
-
   - platform: wifi_info
     ip_address:
       name: "WiFi IP Address"
@@ -568,66 +405,7 @@ media_player:
                 decibel_reduction: 0
                 duration: 1.0s
 
-# Retry a released WiFi while Ethernet is up, so an outage doesn't leave the
-# radio silent until the next cable pull
-interval:
-  - id: wifi_recovery_interval
-    interval: 10min
-    then:
-      - if:
-          condition:
-            and:
-              - ethernet.connected:
-              - not:
-                  wifi.enabled:
-              - lambda: "return id(wifi_provisioned);"
-          then:
-            - script.execute: wifi_recovery_probe
-
 script:
-  - id: wifi_recovery_probe
-    # Re-attempt WiFi while Ethernet carries the device; rejoin restores
-    # dual-home, failure releases the radio again for ESP-NOW.
-    then:
-      - wifi.enable:
-      - wait_until:
-          condition:
-            wifi.connected:
-          timeout: 60s
-      - if:
-          condition:
-            wifi.connected:
-          then:
-            - lambda: "id(ethernet_expected) = false;"
-          else:
-            - if:
-                condition:
-                  ethernet.connected:
-                then:
-                  - script.execute: wifi_release_radio
-
-  - id: wifi_release_radio
-    # Turn WiFi off while Ethernet carries the device, ending AP+STA and the
-    # captive portal, and bounce ESP-NOW so it re-inits standalone for the WizMote
-    then:
-      - lambda: "id(ethernet_expected) = true;"
-      - if:
-          condition:
-            wifi.ap_active:
-          then:
-            # Must reboot to clear a live hotspot: ESPHome can't relaunch a
-            # once-started AP in the same boot, leaving it serving nothing
-            - lambda: |-
-                ESP_LOGW("network", "Rebooting to fully release the active hotspot (one-time)");
-            - delay: 500ms
-            - lambda: "App.safe_reboot();"
-          else:
-            - wifi.disable:
-            - lambda: |-
-                if (id(captive_portal_1).is_active()) {
-                  id(captive_portal_1).end();
-                }
-
   - id: statusCheck
     then:
       - if:
